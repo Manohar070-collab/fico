@@ -369,3 +369,4 @@ export default function CompanySetupModal({ isOpen, onClose, onCompaniesUpdated 
     </div>
   );
 }
+

@@ -2,6 +2,33 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
+# ----------------- Auth & User Schemas -----------------
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    username: Optional[str] = None
+    role: Optional[str] = "FICO Admin"
+
+class UserBase(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: Optional[str] = Field(None, max_length=100)
+    full_name: Optional[str] = Field("Administrator", max_length=100)
+    role: Optional[str] = Field("FICO Admin", max_length=50)
+    is_active: Optional[bool] = True
+
+class UserCreate(UserBase):
+    password: str = Field(..., min_length=4, max_length=100)
+
+class UserLoginJSON(BaseModel):
+    username: str
+    password: str
+
+class UserResponse(UserBase):
+    id: int
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
 # ----------------- Company Schemas -----------------
 class CompanyBase(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=100, description="Name of company or business unit")

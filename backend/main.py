@@ -5,11 +5,15 @@ from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from .database import engine, Base, get_db
-from .models import Company, FiscalYear, ChartOfAccount, Transaction
+from .database import engine, Base, get_db, SessionLocal
+from .models import User, Company, FiscalYear, ChartOfAccount, Transaction
 from .schemas import (
+    Token,
+    UserCreate,
+    UserResponse,
     CompanyCreate,
     CompanyUpdate,
     CompanyResponse,
@@ -21,11 +25,33 @@ from .schemas import (
     TransactionResponse,
     JournalEntryCreate
 )
+from .auth import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    get_current_user,
+    oauth2_scheme
+)
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
 def seed_initial_data(db: Session):
+    # Seed default Admin user if not exists
+    admin_user = db.query(User).filter(User.username == "admin").first()
+    if not admin_user:
+        hashed = hash_password("admin123")
+        admin_user = User(
+            username="admin",
+            email="admin@stackly.erp",
+            hashed_password=hashed,
+            full_name="SAP OneERP Administrator",
+            role="FICO Administrator",
+            is_active=True
+        )
+        db.add(admin_user)
+        db.commit()
+
     # Seed companies if empty
     if db.query(Company).count() == 0:
         db.add_all([
@@ -131,19 +157,26 @@ def seed_initial_data(db: Session):
         ])
         db.commit()
 
+# Ensure seed data exists on load
+_init_db = SessionLocal()
+try:
+    seed_initial_data(_init_db)
+finally:
+    _init_db.close()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Seed sample data
-    db = next(get_db())
+    db = SessionLocal()
     try:
         seed_initial_data(db)
     finally:
         db.close()
     yield
 
+# Matching title and description from user's Swagger screenshot
 app = FastAPI(
-    title="SAP OneERP - FICO API",
-    description="Financial Accounting (FI) and Controlling (CO) REST API backend",
+    title="SAP OneERP Cloud Platform",
+    description="SAP OneERP Financial Accounting (FI) and Controlling (CO) REST API conforming to OpenAPI 3.0",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -157,30 +190,101 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------- Step 4.2 / Root Endpoint -----------------
+# ----------------- Security / Authentication Endpoints -----------------
+@app.post(
+    "/api/v1/auth/login",
+    response_model=Token,
+    tags=["Security"],
+    summary="User Login"
+)
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """
+    OAuth2 Password Bearer login endpoint for Swagger UI and client authentication.
+    Accepts standard username and password form data.
+    Default credentials:
+    - **username**: admin
+    - **password**: admin123 (or admin)
+    """
+    user = db.query(User).filter(User.username == form_data.username).first()
+    
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_token = create_access_token(data={"sub": user.username, "role": user.role})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user.username,
+        "role": user.role
+    }
+
+@app.get(
+    "/api/v1/auth/me",
+    response_model=UserResponse,
+    tags=["Security"],
+    summary="Get Current User Profile"
+)
+def get_current_user_profile(current_user: User = Depends(get_current_user)):
+    """Retrieve profile of the authenticated user using Bearer token."""
+    return current_user
+
+@app.post(
+    "/api/v1/auth/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Security"],
+    summary="Register New User"
+)
+def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.username == user_in.username).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    new_user = User(
+        username=user_in.username,
+        email=user_in.email,
+        hashed_password=hash_password(user_in.password),
+        full_name=user_in.full_name or user_in.username,
+        role=user_in.role or "FICO User",
+        is_active=True
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+# ----------------- Root Endpoint -----------------
 @app.get("/", tags=["Root"])
 def home():
     """Welcome endpoint matching Step 4.2 of guide."""
     return {
         "message": "Welcome to SAP OneERP",
-        "system": "FICO - Financial Accounting Module",
+        "system": "SAP OneERP Cloud Platform - FICO Module",
         "version": "1.0.0",
-        "docs_url": "/docs"
+        "docs_url": "/docs",
+        "auth_url": "/api/v1/auth/login"
     }
 
-# ----------------- Step 6: Company Setup CRUD APIs -----------------
+# ----------------- Company Setup CRUD APIs (Step 6) -----------------
 @app.post(
     "/companies/",
     response_model=CompanyResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["Company Setup"]
 )
-def create_company(company: CompanyCreate, db: Session = Depends(get_db)):
+def create_company(
+    company: CompanyCreate,
+    db: Session = Depends(get_db),
+    token: Optional[str] = Depends(oauth2_scheme)
+):
     """
     Register and create a new Company.
     Validates required fields, formats, and rejects duplicate company codes (returns 400).
     """
-    # Check if company_code already exists
     existing = db.query(Company).filter(Company.company_code == company.company_code.strip()).first()
     if existing:
         raise HTTPException(
@@ -231,7 +335,12 @@ def get_company(company_id: int, db: Session = Depends(get_db)):
     response_model=CompanyResponse,
     tags=["Company Setup"]
 )
-def update_company(company_id: int, update_data: CompanyUpdate, db: Session = Depends(get_db)):
+def update_company(
+    company_id: int,
+    update_data: CompanyUpdate,
+    db: Session = Depends(get_db),
+    token: Optional[str] = Depends(oauth2_scheme)
+):
     """Update company details."""
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
@@ -253,10 +362,13 @@ def update_company(company_id: int, update_data: CompanyUpdate, db: Session = De
     status_code=status.HTTP_200_OK,
     tags=["Company Setup"]
 )
-def delete_company(company_id: int, db: Session = Depends(get_db)):
+def delete_company(
+    company_id: int,
+    db: Session = Depends(get_db),
+    token: Optional[str] = Depends(oauth2_scheme)
+):
     """
     Delete a company if permitted by business rules.
-    Companies with posted general ledger transactions cannot be deleted.
     """
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
@@ -274,12 +386,21 @@ def delete_company(company_id: int, db: Session = Depends(get_db)):
 def get_fiscal_years(db: Session = Depends(get_db)):
     return db.query(FiscalYear).all()
 
-@app.post("/api/fiscal-years/", response_model=FiscalYearResponse, status_code=status.HTTP_201_CREATED, tags=["Fiscal Year"])
-def create_fiscal_year(fy: FiscalYearCreate, db: Session = Depends(get_db)):
+@app.post(
+    "/api/fiscal-years/",
+    response_model=FiscalYearResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Fiscal Year"]
+)
+def create_fiscal_year(
+    fy: FiscalYearCreate,
+    db: Session = Depends(get_db),
+    token: Optional[str] = Depends(oauth2_scheme)
+):
     existing = db.query(FiscalYear).filter(FiscalYear.year == fy.year).first()
     if existing:
         raise HTTPException(status_code=400, detail="Fiscal Year already exists.")
-    new_fy = FiscalYear(**fy.dict())
+    new_fy = FiscalYear(**fy.model_dump())
     db.add(new_fy)
     db.commit()
     db.refresh(new_fy)
@@ -290,12 +411,21 @@ def create_fiscal_year(fy: FiscalYearCreate, db: Session = Depends(get_db)):
 def get_chart_of_accounts(db: Session = Depends(get_db)):
     return db.query(ChartOfAccount).all()
 
-@app.post("/api/chart-of-accounts/", response_model=ChartOfAccountResponse, status_code=status.HTTP_201_CREATED, tags=["Chart of Accounts"])
-def create_chart_of_account(coa: ChartOfAccountCreate, db: Session = Depends(get_db)):
+@app.post(
+    "/api/chart-of-accounts/",
+    response_model=ChartOfAccountResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Chart of Accounts"]
+)
+def create_chart_of_account(
+    coa: ChartOfAccountCreate,
+    db: Session = Depends(get_db),
+    token: Optional[str] = Depends(oauth2_scheme)
+):
     existing = db.query(ChartOfAccount).filter(ChartOfAccount.account_no == coa.account_no).first()
     if existing:
         raise HTTPException(status_code=400, detail="Account number already exists.")
-    new_coa = ChartOfAccount(**coa.dict())
+    new_coa = ChartOfAccount(**coa.model_dump())
     db.add(new_coa)
     db.commit()
     db.refresh(new_coa)
@@ -306,16 +436,34 @@ def create_chart_of_account(coa: ChartOfAccountCreate, db: Session = Depends(get
 def get_transactions(db: Session = Depends(get_db)):
     return db.query(Transaction).order_by(Transaction.id.desc()).all()
 
-@app.post("/api/transactions/", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED, tags=["Transactions"])
-def create_transaction(tx: TransactionCreate, db: Session = Depends(get_db)):
-    new_tx = Transaction(**tx.dict())
+@app.post(
+    "/api/transactions/",
+    response_model=TransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Transactions"]
+)
+def create_transaction(
+    tx: TransactionCreate,
+    db: Session = Depends(get_db),
+    token: Optional[str] = Depends(oauth2_scheme)
+):
+    new_tx = Transaction(**tx.model_dump())
     db.add(new_tx)
     db.commit()
     db.refresh(new_tx)
     return new_tx
 
-@app.post("/api/journal-entries/", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED, tags=["Transactions"])
-def post_journal_entry(je: JournalEntryCreate, db: Session = Depends(get_db)):
+@app.post(
+    "/api/journal-entries/",
+    response_model=TransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Transactions"]
+)
+def post_journal_entry(
+    je: JournalEntryCreate,
+    db: Session = Depends(get_db),
+    token: Optional[str] = Depends(oauth2_scheme)
+):
     """
     Validate double entry rules: Total Debit must equal Total Credit.
     """

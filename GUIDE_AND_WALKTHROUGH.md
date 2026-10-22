@@ -128,3 +128,4 @@ python -m pytest backend/test_api.py -v
 
 ### Q3: "How does the double-entry rule get validated in Journal Entries?"
 > *"In `POST /api/journal-entries/`, we calculate `sum(item.debit)` and `sum(item.credit)`. If they do not match exactly, the transaction is rejected with HTTP 400 and a 'Double-entry violation' error, preventing unbalanced ledger postings."*
+
