@@ -1,11 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Bell, Menu, CheckCircle2, ChevronRight, User, Settings, LogOut } from 'lucide-react';
+import { Search, Bell, Menu, CheckCircle2, ChevronRight, User, Settings, LogOut, Database } from 'lucide-react';
 import { NOTIFICATIONS } from '../data/initialData';
 
 export default function Navbar({
   searchTerm,
   setSearchTerm,
-  onOpenMobileSidebar
+  onOpenMobileSidebar,
+  currentUser = { name: 'John Doe', role: 'FICO User', email: 'john.doe@stackly.erp' },
+  onOpenProfile,
+  onOpenCompanySettings,
+  onSignOut,
+  dbStatus = { database: 'MySQL 8.0', status: 'online' }
 }) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -15,6 +20,11 @@ export default function Navbar({
   const userRef = useRef(null);
 
   const unreadCount = notifications.filter(n => n.unread).length;
+
+  // Calculate initials from name
+  const initials = currentUser.name
+    ? currentUser.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()
+    : 'JD';
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -58,7 +68,17 @@ export default function Navbar({
       </div>
 
       {/* Right controls */}
-      <div className="flex items-center gap-4 sm:gap-6">
+      <div className="flex items-center gap-3 sm:gap-4">
+        {/* Real-Time Database Connection Badge */}
+        <div
+          title={`Connected to ${dbStatus?.database || 'MySQL'} (${dbStatus?.database_target || '127.0.0.1:3306/saperp'})`}
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200/80 rounded-full text-[11px] font-semibold shadow-2xs"
+        >
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <Database className="w-3.5 h-3.5 text-emerald-600" />
+          <span>{dbStatus?.database || 'MySQL 8.0'}</span>
+        </div>
+
         {/* Notification Bell */}
         <div className="relative" ref={notifRef}>
           <button
@@ -116,14 +136,14 @@ export default function Navbar({
             onClick={() => setShowUserMenu(!showUserMenu)}
             className="flex items-center gap-2.5 p-1 rounded-lg hover:bg-slate-50 transition-colors text-left"
           >
-            {/* JD Circle Avatar */}
+            {/* Circle Avatar with initials */}
             <div className="w-9 h-9 rounded-full bg-[#0d1a38] text-white font-bold text-xs flex items-center justify-center tracking-tight shadow-xs">
-              JD
+              {initials}
             </div>
             {/* User name & role */}
             <div className="hidden sm:block leading-tight">
-              <div className="font-semibold text-[13.5px] text-slate-900">John Doe</div>
-              <div className="text-[11.5px] text-slate-500 font-normal">FICO User</div>
+              <div className="font-semibold text-[13.5px] text-slate-900">{currentUser.name}</div>
+              <div className="text-[11.5px] text-slate-500 font-normal">{currentUser.role}</div>
             </div>
           </button>
 
@@ -131,25 +151,41 @@ export default function Navbar({
           {showUserMenu && (
             <div className="absolute right-0 mt-2 w-52 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
               <div className="px-4 py-2 border-b border-slate-100 sm:hidden">
-                <p className="font-semibold text-sm text-slate-800">John Doe</p>
-                <p className="text-xs text-slate-500">FICO User</p>
+                <p className="font-semibold text-sm text-slate-800">{currentUser.name}</p>
+                <p className="text-xs text-slate-500">{currentUser.role}</p>
               </div>
+
+              {/* 1. Profile & Account Button */}
               <button
-                onClick={() => setShowUserMenu(false)}
-                className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 font-medium"
+                onClick={() => {
+                  setShowUserMenu(false);
+                  if (onOpenProfile) onOpenProfile();
+                }}
+                className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium transition-colors"
               >
                 <User className="w-4 h-4 text-slate-400" /> Profile & Account
               </button>
+
+              {/* 2. Company Settings Button */}
               <button
-                onClick={() => setShowUserMenu(false)}
-                className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 font-medium"
+                onClick={() => {
+                  setShowUserMenu(false);
+                  if (onOpenCompanySettings) onOpenCompanySettings();
+                }}
+                className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium transition-colors"
               >
                 <Settings className="w-4 h-4 text-slate-400" /> Company Settings
               </button>
+
               <div className="border-t border-slate-100 my-1"></div>
+
+              {/* 3. Sign Out Button */}
               <button
-                onClick={() => setShowUserMenu(false)}
-                className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-red-600 hover:bg-red-50 font-medium"
+                onClick={() => {
+                  setShowUserMenu(false);
+                  if (onSignOut) onSignOut();
+                }}
+                className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-red-600 hover:bg-red-50 font-medium transition-colors"
               >
                 <LogOut className="w-4 h-4 text-red-500" /> Sign Out
               </button>

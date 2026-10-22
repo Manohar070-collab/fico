@@ -2,12 +2,22 @@ import React, { useState } from 'react';
 import { ChevronDown, ArrowUp } from 'lucide-react';
 import { FINANCIAL_SUMMARIES } from '../data/initialData';
 
-export default function FinancialSummary() {
+export default function FinancialSummary({ liveSummary }) {
   const [selectedPeriod, setSelectedPeriod] = useState('This Year');
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  const currentData = FINANCIAL_SUMMARIES[selectedPeriod] || FINANCIAL_SUMMARIES['This Year'];
+  const baseData = FINANCIAL_SUMMARIES[selectedPeriod] || FINANCIAL_SUMMARIES['This Year'];
   const periods = ['This Year', 'This Quarter', 'This Month', 'Previous Year'];
+
+  // Use live database numbers if available for This Year
+  const currentData = {
+    income: (selectedPeriod === 'This Year' && liveSummary?.income) ? liveSummary.income : baseData.income,
+    incomeChange: baseData.incomeChange,
+    expenses: (selectedPeriod === 'This Year' && liveSummary?.expenses) ? liveSummary.expenses : baseData.expenses,
+    expensesChange: baseData.expensesChange,
+    netProfit: (selectedPeriod === 'This Year' && liveSummary?.net_profit) ? liveSummary.net_profit : baseData.netProfit,
+    profitChange: baseData.profitChange
+  };
 
   return (
     <div className="bg-white border border-[#e2e8f0] rounded-xl p-4 shadow-xs">

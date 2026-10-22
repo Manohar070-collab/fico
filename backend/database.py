@@ -1,18 +1,36 @@
 import os
-from sqlalchemy import create_engine
+import logging
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Default to SQLite for seamless zero-setup execution, with support for MySQL
-# To use MySQL: set DATABASE_URL="mysql+pymysql://root:password@localhost/saperp"
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./saperp.db")
+logger = logging.getLogger("fico.database")
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+# Primary: MySQL database `saperp` on localhost (MySQL 8.0 with user: root, password: Manu)
+MYSQL_DEFAULT_URL = "mysql+pymysql://root:Manu@127.0.0.1:3306/saperp"
+FALLBACK_SQLITE_URL = "sqlite:///./saperp.db"
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args=connect_args,
-    echo=False
-)
+DATABASE_URL = os.getenv("DATABASE_URL", MYSQL_DEFAULT_URL)
+
+try:
+    connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args=connect_args,
+        pool_pre_ping=True,
+        echo=False
+    )
+    # Validate connection immediately
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    print(f"[Database] Successfully connected to primary DB: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
+except Exception as e:
+    print(f"[Database Warning] Failed to connect to primary DB ({DATABASE_URL}): {e}. Falling back to SQLite.")
+    DATABASE_URL = FALLBACK_SQLITE_URL
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        echo=False
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -24,4 +42,5 @@ def get_db():
         yield db
     finally:
         db.close()
+
 

@@ -1,7 +1,13 @@
 import React from 'react';
 import { Building2, Calendar, CalendarDays, FileText, ArrowRight } from 'lucide-react';
 
-export default function KpiCards({ onCardClick, companiesCount = 2 }) {
+export default function KpiCards({
+  onCardClick,
+  companiesCount = 2,
+  activeFiscalYears = 2,
+  openPeriods = 5,
+  totalAccounts = 128
+}) {
   const cards = [
     {
       id: 'Company',
@@ -17,7 +23,7 @@ export default function KpiCards({ onCardClick, companiesCount = 2 }) {
     {
       id: 'Fiscal Year',
       title: 'Active Fiscal Years',
-      value: '2',
+      value: String(activeFiscalYears),
       bg: 'bg-[#effbf5]',
       border: 'border-[#caedd8]',
       iconBg: 'bg-[#10b981]',
@@ -28,7 +34,7 @@ export default function KpiCards({ onCardClick, companiesCount = 2 }) {
     {
       id: 'Fiscal Period',
       title: 'Open Periods',
-      value: '5',
+      value: String(openPeriods),
       bg: 'bg-[#f7f4fe]',
       border: 'border-[#e4dcfc]',
       iconBg: 'bg-[#9333ea]',
@@ -39,7 +45,7 @@ export default function KpiCards({ onCardClick, companiesCount = 2 }) {
     {
       id: 'Chart of Accounts',
       title: 'Total Accounts',
-      value: '128',
+      value: String(totalAccounts),
       bg: 'bg-[#fff8f2]',
       border: 'border-[#fee3d0]',
       iconBg: 'bg-[#f97316]',

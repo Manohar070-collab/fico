@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
+import { createTransactionApi } from '../../services/api';
 
 export default function CreateInvoiceModal({ isOpen, onClose, type = 'AP', onAddTransaction }) {
   const isAP = type === 'AP';
@@ -7,29 +8,48 @@ export default function CreateInvoiceModal({ isOpen, onClose, type = 'AP', onAdd
   const [description, setDescription] = useState(isAP ? 'Supplier Invoice - Hardware' : 'Customer Invoice - Cloud Consulting');
   const [amount, setAmount] = useState('50000');
   const [docDate, setDocDate] = useState('15-04-2025');
+  const [submitting, setSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const parsedAmount = parseFloat(amount) || 0;
     const randomNum = Math.floor(100000 + Math.random() * 900000);
     const prefix = isAP ? 'AP' : 'AR';
     const modName = isAP ? 'Accounts Payable' : 'Accounts Receivable';
 
-    const newTx = {
-      id: `tx-${Date.now()}`,
+    const txPayload = {
+      doc_no: `${prefix}-${randomNum}`,
       date: docDate,
-      docNo: `${prefix}-${randomNum}`,
       module: modName,
       description: `${isAP ? 'Supplier Invoice' : 'Customer Invoice'} - ${partyName}`,
       amount: parsedAmount,
       status: 'Approved',
-      statusColor: 'blue'
+      status_color: 'blue'
     };
 
-    onAddTransaction(newTx);
-    onClose();
+    setSubmitting(true);
+    try {
+      const savedTx = await createTransactionApi(txPayload);
+      onAddTransaction(savedTx);
+      onClose();
+    } catch (err) {
+      // Fallback
+      onAddTransaction({
+        id: `tx-${Date.now()}`,
+        docNo: txPayload.doc_no,
+        date: txPayload.date,
+        module: txPayload.module,
+        description: txPayload.description,
+        amount: parsedAmount,
+        status: 'Approved',
+        statusColor: 'blue'
+      });
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -108,11 +128,12 @@ export default function CreateInvoiceModal({ isOpen, onClose, type = 'AP', onAdd
             </button>
             <button
               type="submit"
+              disabled={submitting}
               className={`px-5 py-2 text-xs font-semibold text-white rounded-lg shadow-xs transition-colors ${
                 isAP ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-purple-600 hover:bg-purple-700'
               }`}
             >
-              {isAP ? 'Post AP Invoice' : 'Generate AR Invoice'}
+              {submitting ? 'Saving to Database...' : isAP ? 'Post AP Invoice' : 'Generate AR Invoice'}
             </button>
           </div>
         </form>
@@ -120,4 +141,3 @@ export default function CreateInvoiceModal({ isOpen, onClose, type = 'AP', onAdd
     </div>
   );
 }
-

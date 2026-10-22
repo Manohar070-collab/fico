@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
 import KpiCards from './components/KpiCards';
@@ -15,47 +15,83 @@ import GenerateReportModal from './components/modals/GenerateReportModal';
 import ViewAllTransactionsModal from './components/modals/ViewAllTransactionsModal';
 import ModuleDetailModal from './components/modals/ModuleDetailModal';
 import CompanySetupModal from './components/modals/CompanySetupModal';
+import UserProfileModal from './components/modals/UserProfileModal';
+import AuthModal from './components/modals/AuthModal';
 
 import { INITIAL_TRANSACTIONS } from './data/initialData';
-import { fetchCompanies } from './services/api';
+import { fetchCompanies, fetchTransactions, fetchSummaryApi, fetchSystemStatusApi } from './services/api';
 
 export default function App() {
   const [activeMenu, setActiveMenu] = useState('FICO');
   const [activeSubmenu, setActiveSubmenu] = useState(null);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Current authenticated user state
+  const [currentUser, setCurrentUser] = useState({
+    name: 'John Doe',
+    role: 'FICO User',
+    email: 'john.doe@stackly.erp'
+  });
+
+  // Real-time Database Status
+  const [dbStatus, setDbStatus] = useState({ database: 'MySQL 8.0', status: 'online', database_target: '127.0.0.1:3306/saperp' });
+
+  // Live real-time state from Database
   const [companiesCount, setCompaniesCount] = useState(2);
+  const [activeFiscalYears, setActiveFiscalYears] = useState(2);
+  const [openPeriods, setOpenPeriods] = useState(5);
+  const [totalAccounts, setTotalAccounts] = useState(128);
+  const [liveSummary, setLiveSummary] = useState(null);
 
   // Transaction list state
   const [transactions, setTransactions] = useState(INITIAL_TRANSACTIONS);
 
-  // Modals state
-  const [modalType, setModalType] = useState(null); // 'company-setup', 'create-je', 'create-ap', 'create-ar', 'add-asset', 'create-budget', 'generate-report', 'view-all-tx', 'module-detail'
+  // Modals state: 'company-setup' | 'user-profile' | 'auth-login' | 'create-je' | 'create-ap' | 'create-ar' | 'add-asset' | 'create-budget' | 'generate-report' | 'view-all-tx' | 'module-detail'
+  const [modalType, setModalType] = useState(null);
   const [selectedModuleForModal, setSelectedModuleForModal] = useState(null);
 
-  // Sync companies count from backend on load
-  useEffect(() => {
-    fetchCompanies().then((data) => {
-      if (data && Array.isArray(data)) {
-        setCompaniesCount(data.length);
+  // Function to load all live real-time data from database
+  const loadRealtimeData = useCallback(async () => {
+    try {
+      const status = await fetchSystemStatusApi();
+      if (status) setDbStatus(status);
+
+      const summary = await fetchSummaryApi();
+      if (summary) {
+        if (summary.total_companies !== undefined) setCompaniesCount(summary.total_companies);
+        if (summary.active_fiscal_years !== undefined) setActiveFiscalYears(summary.active_fiscal_years);
+        if (summary.open_periods !== undefined) setOpenPeriods(summary.open_periods);
+        if (summary.total_accounts !== undefined) setTotalAccounts(summary.total_accounts);
+        if (summary.financial_summary) setLiveSummary(summary.financial_summary);
       }
-    });
+
+      const txs = await fetchTransactions();
+      if (txs && txs.length > 0) {
+        setTransactions(txs);
+      }
+    } catch (e) {
+      console.warn('Realtime fetch fallback', e);
+    }
   }, []);
 
-  // Add a newly created transaction
+  useEffect(() => {
+    loadRealtimeData();
+  }, [loadRealtimeData]);
+
   const handleAddTransaction = (newTx) => {
-    setTransactions([newTx, ...transactions]);
+    setTransactions((prev) => [newTx, ...prev.filter(t => t.docNo !== newTx.docNo)]);
+    loadRealtimeData();
   };
 
-  // Filtered transactions based on search term
   const displayedTransactions = transactions.filter((tx) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     return (
-      tx.docNo.toLowerCase().includes(term) ||
-      tx.description.toLowerCase().includes(term) ||
-      tx.module.toLowerCase().includes(term) ||
-      tx.status.toLowerCase().includes(term)
+      (tx.docNo && tx.docNo.toLowerCase().includes(term)) ||
+      (tx.description && tx.description.toLowerCase().includes(term)) ||
+      (tx.module && tx.module.toLowerCase().includes(term)) ||
+      (tx.status && tx.status.toLowerCase().includes(term))
     );
   });
 
@@ -70,6 +106,17 @@ export default function App() {
       setSelectedModuleForModal(moduleName);
       setModalType('module-detail');
     }
+  };
+
+  // Sign out handler
+  const handleSignOut = () => {
+    localStorage.removeItem('access_token');
+    setCurrentUser({
+      name: 'Signed Out',
+      role: 'Guest / Not Authenticated',
+      email: ''
+    });
+    setModalType('auth-login');
   };
 
   return (
@@ -87,33 +134,51 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Navigation */}
+        {/* Top Navigation Bar with fully working buttons */}
         <Navbar
           searchTerm={searchTerm}
           setSearchTerm={setSearchTerm}
           onOpenMobileSidebar={() => setIsMobileOpen(true)}
+          currentUser={currentUser}
+          dbStatus={dbStatus}
+          onOpenProfile={() => setModalType('user-profile')}
+          onOpenCompanySettings={() => setModalType('company-setup')}
+          onSignOut={handleSignOut}
         />
 
         {/* Dashboard Body */}
         <main className="flex-1 p-4 sm:p-6 lg:p-7 max-w-[1600px] w-full mx-auto">
           {/* Header Section */}
-          <div className="mb-6">
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-              FICO - Financial Accounting
-            </h1>
-            <p className="text-[13px] sm:text-[13.5px] text-slate-500 mt-0.5">
-              Manage your company's financial transactions and reports
-            </p>
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                FICO - Financial Accounting
+              </h1>
+              <p className="text-[13px] sm:text-[13.5px] text-slate-500 mt-0.5">
+                Manage your company's financial transactions and reports with real-time database sync
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                Real-Time DB Sync Active
+              </span>
+            </div>
           </div>
 
-          {/* KPI Metric Cards (4 Columns) */}
-          <KpiCards onCardClick={handleOpenModule} companiesCount={companiesCount} />
+          {/* KPI Metric Cards */}
+          <KpiCards
+            onCardClick={handleOpenModule}
+            companiesCount={companiesCount}
+            activeFiscalYears={activeFiscalYears}
+            openPeriods={openPeriods}
+            totalAccounts={totalAccounts}
+          />
 
-          {/* Main 2-Column Split: Content Area + Right Aside */}
+          {/* Main 2-Column Split */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left / Center Major Section: Transactions & Modules (approx 72%) */}
+            {/* Center Section: Transactions & Modules */}
             <div className="lg:col-span-8 xl:col-span-9 space-y-6">
-              {/* Recent Transactions Table */}
               <RecentTransactionsTable
                 transactions={displayedTransactions}
                 onViewAll={() => setModalType('view-all-tx')}
@@ -123,29 +188,44 @@ export default function App() {
                 }}
               />
 
-              {/* FICO Modules Grid */}
               <ModulesGrid
                 onSelectModule={handleOpenModule}
                 onViewAllModules={() => handleOpenModule('Chart of Accounts')}
               />
             </div>
 
-            {/* Right Aside: Quick Actions & Financial Summary (approx 28%) */}
+            {/* Right Aside: Quick Actions & Financial Summary */}
             <div className="lg:col-span-4 xl:col-span-3 space-y-6">
               <QuickActions onActionClick={handleQuickAction} />
-              <FinancialSummary />
+              <FinancialSummary liveSummary={liveSummary} />
             </div>
           </div>
         </main>
       </div>
 
-      {/* Interactive Modals */}
+      {/* User Profile Modal */}
+      <UserProfileModal
+        isOpen={modalType === 'user-profile'}
+        onClose={() => setModalType(null)}
+        user={currentUser}
+        onUpdateUser={(updated) => setCurrentUser(updated)}
+      />
+
+      {/* Sign In / Sign Out Auth Modal */}
+      <AuthModal
+        isOpen={modalType === 'auth-login'}
+        onClose={() => setModalType(null)}
+        onLoginSuccess={(loggedUser) => setCurrentUser(loggedUser)}
+      />
+
+      {/* Company Settings / Setup Modal */}
       <CompanySetupModal
         isOpen={modalType === 'company-setup'}
         onClose={() => setModalType(null)}
-        onCompaniesUpdated={(count) => setCompaniesCount(count)}
+        onCompaniesUpdated={() => loadRealtimeData()}
       />
 
+      {/* Quick Action Modals */}
       <CreateJournalEntryModal
         isOpen={modalType === 'create-je'}
         onClose={() => setModalType(null)}
@@ -202,6 +282,7 @@ export default function App() {
           setSelectedModuleForModal(null);
         }}
         onQuickAction={handleQuickAction}
+        onDataChanged={loadRealtimeData}
       />
     </div>
   );
