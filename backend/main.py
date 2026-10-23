@@ -1,47 +1,37 @@
-import os
-import random
+"""
+SAP OneERP Cloud Platform - FICO (Financial Accounting & Controlling) REST API.
+Conforms to OpenAPI 3.0 specification with interactive Swagger UI at /docs.
+"""
 import logging
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
-from .database import engine, Base, get_db, SessionLocal
-from .models import User, Company, FiscalYear, ChartOfAccount, Transaction
-from .schemas import (
-    Token,
-    UserCreate,
-    UserResponse,
-    CompanyCreate,
-    CompanyUpdate,
-    CompanyResponse,
-    FiscalYearCreate,
-    FiscalYearResponse,
-    ChartOfAccountCreate,
-    ChartOfAccountResponse,
-    TransactionCreate,
-    TransactionResponse,
-    JournalEntryCreate
-)
-from .auth import (
-    hash_password,
-    verify_password,
-    create_access_token,
-    get_current_user,
-    oauth2_scheme
+from backend.core.config import settings
+from backend.core.security import hash_password
+from backend.database.session import engine, Base, SessionLocal
+from backend.models.fico_models import User, Company, FiscalYear, ChartOfAccount, Transaction
+
+from backend.api import (
+    system_router,
+    auth_router,
+    companies_router,
+    fiscal_years_router,
+    coa_router,
+    transactions_router,
+    reports_router,
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fico")
 
-# Create database tables
+# 1. Ensure database tables exist
 Base.metadata.create_all(bind=engine)
 
 def seed_initial_data(db: Session):
+    """Seed initial FICO master data if tables are empty."""
     # Seed default Admin user if not exists
     admin_user = db.query(User).filter(User.username.ilike("admin")).first()
     if not admin_user:
@@ -102,67 +92,19 @@ def seed_initial_data(db: Session):
         ])
         db.commit()
 
-    # Seed recent transactions if empty (matching screenshot)
+    # Seed recent transactions matching screenshot
     if db.query(Transaction).count() == 0:
         db.add_all([
-            Transaction(
-                doc_no="JE-000123",
-                date="10-04-2025",
-                module="Journal Entry",
-                description="Rent Expense",
-                amount=10000.00,
-                status="Posted",
-                status_color="green"
-            ),
-            Transaction(
-                doc_no="AP-000456",
-                date="09-04-2025",
-                module="Accounts Payable",
-                description="Supplier Invoice",
-                amount=50000.00,
-                status="Approved",
-                status_color="blue"
-            ),
-            Transaction(
-                doc_no="AR-000789",
-                date="08-04-2025",
-                module="Accounts Receivable",
-                description="Customer Invoice",
-                amount=75000.00,
-                status="Approved",
-                status_color="blue"
-            ),
-            Transaction(
-                doc_no="FA-000321",
-                date="07-04-2025",
-                module="Fixed Assets",
-                description="Machine Purchase",
-                amount=500000.00,
-                status="Posted",
-                status_color="green"
-            ),
-            Transaction(
-                doc_no="BG-000654",
-                date="06-04-2025",
-                module="Budgeting",
-                description="Annual Budget",
-                amount=1000000.00,
-                status="Created",
-                status_color="purple"
-            ),
-            Transaction(
-                doc_no="GL-000987",
-                date="05-04-2025",
-                module="General Ledger",
-                description="Period Close",
-                amount=0.00,
-                status="In Progress",
-                status_color="slate"
-            )
+            Transaction(doc_no="JE-000123", date="10-04-2025", module="Journal Entry", description="Rent Expense", amount=10000.00, status="Posted", status_color="green"),
+            Transaction(doc_no="AP-000456", date="09-04-2025", module="Accounts Payable", description="Supplier Invoice", amount=50000.00, status="Approved", status_color="blue"),
+            Transaction(doc_no="AR-000789", date="08-04-2025", module="Accounts Receivable", description="Customer Invoice", amount=75000.00, status="Approved", status_color="blue"),
+            Transaction(doc_no="FA-000321", date="07-04-2025", module="Fixed Assets", description="Machine Purchase", amount=500000.00, status="Posted", status_color="green"),
+            Transaction(doc_no="BG-000654", date="06-04-2025", module="Budgeting", description="Annual Budget", amount=1000000.00, status="Created", status_color="purple"),
+            Transaction(doc_no="GL-000987", date="05-04-2025", module="General Ledger", description="Period Close", amount=0.00, status="In Progress", status_color="slate")
         ])
         db.commit()
 
-# Ensure seed data exists on load
+# Ensure seed data exists on module load
 _init_db = SessionLocal()
 try:
     seed_initial_data(_init_db)
@@ -171,6 +113,7 @@ finally:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application startup & shutdown events."""
     db = SessionLocal()
     try:
         seed_initial_data(db)
@@ -178,458 +121,32 @@ async def lifespan(app: FastAPI):
         db.close()
     yield
 
-# Matching title and description from user's Swagger screenshot
+# 2. FastAPI Application Instance
 app = FastAPI(
-    title="SAP OneERP Cloud Platform",
-    description="SAP OneERP Financial Accounting (FI) and Controlling (CO) REST API conforming to OpenAPI 3.0",
-    version="1.0.0",
+    title=settings.PROJECT_NAME,
+    description=settings.PROJECT_DESCRIPTION,
+    version=settings.VERSION,
     lifespan=lifespan
 )
 
-# CORS Middleware for frontend access and Swagger UI
+# 3. CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ----------------- Security / Authentication Endpoints -----------------
-@app.post(
-    "/api/v1/auth/login",
-    response_model=Token,
-    tags=["Security"],
-    summary="User Login"
-)
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
-):
-    """
-    OAuth2 Password Bearer login endpoint for Swagger UI and client authentication.
-    Accepts standard username and password from Swagger UI Authorize modal.
-    - **username**: admin (or any registered user)
-    - **password**: admin123 (or admin / password / root)
-    """
-    uname = (form_data.username or "").strip()
-    pwd = (form_data.password or "").strip()
+# 4. Mount API Routers
+app.include_router(system_router)
+app.include_router(auth_router)
+app.include_router(companies_router)
+app.include_router(fiscal_years_router)
+app.include_router(coa_router)
+app.include_router(transactions_router)
+app.include_router(reports_router)
 
-    if not uname:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username is required"
-        )
-
-    user = db.query(User).filter(User.username.ilike(uname)).first()
-    
-    if not user:
-        if uname.lower() in ["admin", "administrator"]:
-            user = User(
-                username="admin",
-                email="admin@stackly.erp",
-                hashed_password=hash_password(pwd or "admin123"),
-                full_name="SAP OneERP Administrator",
-                role="FICO Administrator",
-                is_active=True
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-    is_valid = verify_password(pwd, user.hashed_password)
-    if not is_valid and pwd in ["admin123", "admin", "password", "password123", "root", "123456"]:
-        is_valid = True
-
-    if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    access_token = create_access_token(data={"sub": user.username, "role": user.role})
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "username": user.username,
-        "role": user.role
-    }
-
-@app.get(
-    "/api/v1/auth/me",
-    response_model=UserResponse,
-    tags=["Security"],
-    summary="Get Current User Profile"
-)
-def get_current_user_profile(current_user: User = Depends(get_current_user)):
-    """Retrieve profile of the authenticated user using Bearer token."""
-    return current_user
-
-@app.post(
-    "/api/v1/auth/register",
-    response_model=UserResponse,
-    status_code=status.HTTP_201_CREATED,
-    tags=["Security"],
-    summary="Register New User"
-)
-def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.username == user_in.username).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Username already registered")
-    
-    new_user = User(
-        username=user_in.username,
-        email=user_in.email,
-        hashed_password=hash_password(user_in.password),
-        full_name=user_in.full_name or user_in.username,
-        role=user_in.role or "FICO User",
-        is_active=True
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return new_user
-
-# ----------------- Root Endpoint -----------------
-@app.get("/", tags=["Root"])
-def home():
-    """Welcome endpoint matching Step 4.2 of guide."""
-    return {
-        "message": "Welcome to SAP OneERP",
-        "system": "SAP OneERP Cloud Platform - FICO Module",
-        "version": "1.0.0",
-        "docs_url": "/docs",
-        "auth_url": "/api/v1/auth/login"
-    }
-
-# ----------------- Company Setup CRUD APIs (Step 6) -----------------
-@app.post(
-    "/companies/",
-    response_model=CompanyResponse,
-    status_code=status.HTTP_201_CREATED,
-    tags=["Company Setup"]
-)
-def create_company(
-    company: CompanyCreate,
-    db: Session = Depends(get_db),
-    token: Optional[str] = Depends(oauth2_scheme)
-):
-    """
-    Register and create a new Company.
-    Validates required fields, formats, and rejects duplicate company codes (returns 400).
-    """
-    existing = db.query(Company).filter(Company.company_code == company.company_code.strip()).first()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Company code '{company.company_code}' already exists. Company codes must be unique."
-        )
-
-    new_company = Company(
-        company_name=company.company_name.strip(),
-        company_code=company.company_code.strip().upper(),
-        country=company.country,
-        currency=company.currency.upper(),
-        financial_year_start=company.financial_year_start,
-        address=company.address,
-        status=company.status or "Active"
-    )
-    db.add(new_company)
-    db.commit()
-    db.refresh(new_company)
-    return new_company
-
-@app.get(
-    "/companies/",
-    response_model=List[CompanyResponse],
-    tags=["Company Setup"]
-)
-def list_companies(db: Session = Depends(get_db)):
-    """Retrieve all registered companies."""
-    return db.query(Company).order_by(Company.id.asc()).all()
-
-@app.get(
-    "/companies/{company_id}",
-    response_model=CompanyResponse,
-    tags=["Company Setup"]
-)
-def get_company(company_id: int, db: Session = Depends(get_db)):
-    """Retrieve details of a specific company by its ID."""
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Company with ID {company_id} not found."
-        )
-    return company
-
-@app.put(
-    "/companies/{company_id}",
-    response_model=CompanyResponse,
-    tags=["Company Setup"]
-)
-def update_company(
-    company_id: int,
-    update_data: CompanyUpdate,
-    db: Session = Depends(get_db),
-    token: Optional[str] = Depends(oauth2_scheme)
-):
-    """Update company details."""
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Company with ID {company_id} not found."
-        )
-
-    for field, value in update_data.model_dump(exclude_unset=True).items():
-        if value is not None:
-            setattr(company, field, value)
-
-    db.commit()
-    db.refresh(company)
-    return company
-
-@app.delete(
-    "/companies/{company_id}",
-    status_code=status.HTTP_200_OK,
-    tags=["Company Setup"]
-)
-def delete_company(
-    company_id: int,
-    db: Session = Depends(get_db),
-    token: Optional[str] = Depends(oauth2_scheme)
-):
-    """Delete a company."""
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Company with ID {company_id} not found."
-        )
-
-    db.delete(company)
-    db.commit()
-    return {"message": f"Company '{company.company_name}' ({company.company_code}) deleted successfully."}
-
-# ----------------- Fiscal Year APIs -----------------
-@app.get("/api/fiscal-years/", response_model=List[FiscalYearResponse], tags=["Fiscal Year"])
-def get_fiscal_years(db: Session = Depends(get_db)):
-    return db.query(FiscalYear).order_by(FiscalYear.id.asc()).all()
-
-@app.post(
-    "/api/fiscal-years/",
-    response_model=FiscalYearResponse,
-    status_code=status.HTTP_201_CREATED,
-    tags=["Fiscal Year"]
-)
-def create_fiscal_year(
-    fy: FiscalYearCreate,
-    db: Session = Depends(get_db),
-    token: Optional[str] = Depends(oauth2_scheme)
-):
-    existing = db.query(FiscalYear).filter(FiscalYear.year == fy.year).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Fiscal Year already exists.")
-    new_fy = FiscalYear(**fy.model_dump())
-    db.add(new_fy)
-    db.commit()
-    db.refresh(new_fy)
-    return new_fy
-
-# ----------------- Chart of Accounts APIs -----------------
-@app.get("/api/chart-of-accounts/", response_model=List[ChartOfAccountResponse], tags=["Chart of Accounts"])
-def get_chart_of_accounts(db: Session = Depends(get_db)):
-    return db.query(ChartOfAccount).order_by(ChartOfAccount.account_no.asc()).all()
-
-@app.post(
-    "/api/chart-of-accounts/",
-    response_model=ChartOfAccountResponse,
-    status_code=status.HTTP_201_CREATED,
-    tags=["Chart of Accounts"]
-)
-def create_chart_of_account(
-    coa: ChartOfAccountCreate,
-    db: Session = Depends(get_db),
-    token: Optional[str] = Depends(oauth2_scheme)
-):
-    existing = db.query(ChartOfAccount).filter(ChartOfAccount.account_no == coa.account_no.strip()).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Account number already exists.")
-    new_coa = ChartOfAccount(**coa.model_dump())
-    db.add(new_coa)
-    db.commit()
-    db.refresh(new_coa)
-    return new_coa
-
-@app.delete(
-    "/api/chart-of-accounts/{account_id}",
-    status_code=status.HTTP_200_OK,
-    tags=["Chart of Accounts"]
-)
-def delete_chart_of_account(account_id: int, db: Session = Depends(get_db)):
-    acc = db.query(ChartOfAccount).filter(ChartOfAccount.id == account_id).first()
-    if not acc:
-        raise HTTPException(status_code=404, detail="Account not found.")
-    db.delete(acc)
-    db.commit()
-    return {"message": "Account deleted successfully."}
-
-# ----------------- Transactions APIs -----------------
-@app.get("/api/transactions/", response_model=List[TransactionResponse], tags=["Transactions"])
-def get_transactions(db: Session = Depends(get_db)):
-    return db.query(Transaction).order_by(Transaction.id.desc()).all()
-
-@app.post(
-    "/api/transactions/",
-    response_model=TransactionResponse,
-    status_code=status.HTTP_201_CREATED,
-    tags=["Transactions"]
-)
-def create_transaction(
-    tx: TransactionCreate,
-    db: Session = Depends(get_db),
-    token: Optional[str] = Depends(oauth2_scheme)
-):
-    new_tx = Transaction(**tx.model_dump())
-    db.add(new_tx)
-    db.commit()
-    db.refresh(new_tx)
-    return new_tx
-
-@app.post(
-    "/api/journal-entries/",
-    response_model=TransactionResponse,
-    status_code=status.HTTP_201_CREATED,
-    tags=["Transactions"]
-)
-def post_journal_entry(
-    je: JournalEntryCreate,
-    db: Session = Depends(get_db),
-    token: Optional[str] = Depends(oauth2_scheme)
-):
-    """
-    Validate double entry rules: Total Debit must equal Total Credit.
-    """
-    total_debit = sum(item.debit for item in je.items)
-    total_credit = sum(item.credit for item in je.items)
-
-    if round(total_debit, 2) != round(total_credit, 2):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Double-entry violation: Total Debit (₹{total_debit}) must equal Total Credit (₹{total_credit})."
-        )
-
-    doc_no = f"JE-{random.randint(100000, 999999)}"
-    new_tx = Transaction(
-        doc_no=doc_no,
-        date=je.date,
-        module="Journal Entry",
-        description=je.description,
-        amount=total_debit,
-        status=je.status or "Posted",
-        status_color="green" if je.status == "Posted" else "slate"
-    )
-    db.add(new_tx)
-    db.commit()
-    db.refresh(new_tx)
-    return new_tx
-
-# ----------------- Financial Reports APIs -----------------
-@app.get("/api/reports/balance-sheet", tags=["Financial Reports"])
-def get_balance_sheet(db: Session = Depends(get_db)):
-    assets = db.query(ChartOfAccount).filter(ChartOfAccount.category == "Assets").all()
-    liabilities = db.query(ChartOfAccount).filter(ChartOfAccount.category == "Liabilities").all()
-    equity = db.query(ChartOfAccount).filter(ChartOfAccount.category == "Equity").all()
-
-    total_assets = sum(a.balance for a in assets)
-    total_liabilities = sum(l.balance for l in liabilities)
-    total_equity = sum(e.balance for e in equity)
-
-    return {
-        "report": "Balance Sheet",
-        "as_of": "Current FY 2025-2026",
-        "assets": [{"name": a.name, "account_no": a.account_no, "balance": a.balance} for a in assets],
-        "total_assets": total_assets,
-        "liabilities": [{"name": l.name, "account_no": l.account_no, "balance": l.balance} for l in liabilities],
-        "total_liabilities": total_liabilities,
-        "equity": [{"name": e.name, "account_no": e.account_no, "balance": e.balance} for e in equity],
-        "total_equity": total_equity,
-        "is_balanced": total_assets == (total_liabilities + total_equity)
-    }
-
-@app.get("/api/reports/profit-loss", tags=["Financial Reports"])
-def get_profit_loss(db: Session = Depends(get_db)):
-    revenues = db.query(ChartOfAccount).filter(ChartOfAccount.category == "Revenue").all()
-    expenses = db.query(ChartOfAccount).filter(ChartOfAccount.category == "Expense").all()
-
-    total_revenue = sum(r.balance for r in revenues) or 1250000.0
-    total_expenses = sum(e.balance for e in expenses) or 875000.0
-    net_profit = total_revenue - total_expenses
-
-    return {
-        "report": "Profit & Loss Statement",
-        "period": "FY 2025-2026",
-        "revenues": [{"name": r.name, "balance": r.balance} for r in revenues],
-        "total_revenue": total_revenue,
-        "expenses": [{"name": e.name, "balance": e.balance} for e in expenses],
-        "total_expenses": total_expenses,
-        "net_profit": net_profit
-    }
-
-# ----------------- Dashboard Summary API (Real-Time DB Aggregation) -----------------
-@app.get("/api/summary/", tags=["Dashboard Summary"])
-def get_summary(db: Session = Depends(get_db)):
-    total_companies = db.query(Company).count()
-    active_fiscal_years = db.query(FiscalYear).filter(FiscalYear.status == "Active").count()
-    total_accounts = db.query(ChartOfAccount).count()
-    total_transactions = db.query(Transaction).count()
-
-    txs = db.query(Transaction).all()
-    
-    ar_total = sum(t.amount for t in txs if t.module in ["Accounts Receivable", "Revenue"])
-    ap_total = sum(t.amount for t in txs if t.module in ["Accounts Payable", "Expense"])
-    
-    income = 1250000.0 + (ar_total if ar_total > 75000 else 0)
-    expenses = 875000.0 + (ap_total if ap_total > 50000 else 0)
-    net_profit = income - expenses
-
-    return {
-        "total_companies": total_companies,
-        "active_fiscal_years": active_fiscal_years,
-        "open_periods": 5,
-        "total_accounts": total_accounts,
-        "total_transactions": total_transactions,
-        "financial_summary": {
-            "income": f"₹ {income:,.2f}",
-            "expenses": f"₹ {expenses:,.2f}",
-            "net_profit": f"₹ {net_profit:,.2f}",
-            "raw": {
-                "income": income,
-                "expenses": expenses,
-                "net_profit": net_profit
-            }
-        }
-    }
-
-# ----------------- Database / System Health -----------------
-@app.get("/api/v1/system/status", tags=["System & Health"])
-def get_system_status(db: Session = Depends(get_db)):
-    db_type = "MySQL 8.0" if "mysql" in str(engine.url) else "SQLite"
-    return {
-        "status": "online",
-        "database": db_type,
-        "database_target": str(engine.url).split("@")[-1] if "@" in str(engine.url) else "saperp.db",
-        "companies_count": db.query(Company).count(),
-        "transactions_count": db.query(Transaction).count(),
-        "accounts_count": db.query(ChartOfAccount).count(),
-        "fiscal_years_count": db.query(FiscalYear).count()
-    }
-
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

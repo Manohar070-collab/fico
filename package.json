@@ -1,30 +1,26 @@
 {
-  "name": "fico",
+  "name": "fico-monorepo",
+  "version": "1.0.0",
   "private": true,
-  "version": "0.0.0",
-  "type": "module",
+  "description": "SAP OneERP FICO (Financial Accounting & Controlling) Platform",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview",
+    "lint": "npm --prefix frontend run lint",
+    "frontend": "npm --prefix frontend run dev",
+    "backend": "python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload",
+    "test:backend": "python -m pytest backend/test_api.py -v",
+    "test": "npm run test:backend"
   },
-  "dependencies": {
-    "@tailwindcss/vite": "^4.3.3",
-    "clsx": "^2.1.1",
-    "lucide-react": "^1.57.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "tailwind-merge": "^3.7.0"
-  },
-  "devDependencies": {
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.7",
-    "@vitejs/plugin-react": "^6.1.1",
-    "autoprefixer": "^10.6.1",
-    "oxlint": "^1.81.0",
-    "postcss": "^8.5.30",
-    "tailwindcss": "^4.3.3",
-    "vite": "^8.3.0"
-  }
+  "keywords": [
+    "sap",
+    "oneerp",
+    "fico",
+    "fastapi",
+    "react",
+    "mysql"
+  ],
+  "author": "SAP OneERP Engineering",
+  "license": "MIT"
 }
